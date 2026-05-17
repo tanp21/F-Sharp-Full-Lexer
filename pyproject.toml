@@ -1,0 +1,33 @@
+[project]
+name = "fsharp-full-lexer"
+version = "0.1.0"
+description = "Python port of the official F# lexer rules"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "regex>=2025.11.3",
+]
+
+[project.scripts]
+fsharp-lexer = "fsharp_full_lexer.cli:main"
+fsharp-lexer-diff = "fsharp_full_lexer.compare:main"
+fsharp-lexer-generate = "fsharp_full_lexer.generate:main"
+fslexpy = "fslexpy.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.1",
+    "ruff>=0.14.6",
+]
+
+[build-system]
+requires = ["uv_build>=0.9.5,<0.10.0"]
+build-backend = "uv_build"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+exclude = ["src/fsharp_full_lexer/generated"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
