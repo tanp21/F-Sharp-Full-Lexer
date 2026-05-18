@@ -34,7 +34,7 @@ XINT_BODY = (
     r"|0[bB][01](?:[01_]*[01])?"
 )
 FLOAT_RE = regex.compile(
-    rf"(?:{INT_BODY}\.(?:{INT_BODY})?|{INT_BODY}(?:\.(?:{INT_BODY})?)?[eE][+-]?{INT_BODY})",
+    rf"(?:{INT_BODY}(?:\.(?:{INT_BODY})?)?[eE][+-]?{INT_BODY}|{INT_BODY}\.(?:{INT_BODY})?)",
     regex.VERSION1,
 )
 INT_RE = regex.compile(INT_BODY, regex.VERSION1)
@@ -228,12 +228,17 @@ class RawLexer:
             if self.skip_trivia:
                 return None
             return Token(TokenKind.WHITESPACE, None, r, "\n")
-        if self.pos.column == 0 and ch == "#":
+        if self.is_line_directive_position() and ch == "#":
             directive = self.scan_directive(active=True)
             if directive is not False:
                 return directive
+            skipped = self.scan_line_directive_name_as_hash()
+            if skipped is not None:
+                return skipped
         if self.startswith("//"):
             return self.scan_line_comment()
+        if self.startswith("(*)"):
+            return self.scan_punctuation()
         if self.startswith("(*"):
             r = self.advance("(*")
             return self.scan_block_comment(1, r.start)
@@ -244,7 +249,7 @@ class RawLexer:
             return self.scan_verbatim_string()
         if self.startswith('$"') or ch == '"':
             return self.scan_regular_string()
-        if ch == "`" and self.startswith("``"):
+        if ch == "`" and (not self.skip_trivia or self.startswith("``")):
             return self.scan_backtick_identifier()
         if ch == "'":
             char = self.scan_char_literal()
@@ -268,6 +273,10 @@ class RawLexer:
         op = self.scan_operator()
         if op is not None:
             return op
+        if not self.skip_trivia and (ord(ch) > 0x7F or ch == "\\"):
+            text = self.rest_of_line() or ch
+            self.advance(text)
+            return None
         r = self.advance(ch)
         return Token(TokenKind.LEX_FAILURE, f"Unexpected character {ch!r}", r, ch)
 
@@ -282,7 +291,22 @@ class RawLexer:
             self.args.diagnostics.error("FSLEX_TAB", "Tabs are not allowed by the F# lexer", range_)
         if self.skip_trivia:
             return None
-        return Token(TokenKind.WHITESPACE, None, range_, text)
+        value = None
+        if self.index < len(self.source) and self.source[self.index] == "#":
+            line_start = self.source.rfind("\n", 0, start) + 1
+            if all(ch in " \t" for ch in self.source[line_start:start]):
+                line_end = self.source.find("\n", self.index)
+                if line_end < 0:
+                    line_end = len(self.source)
+                stripped = self.source[self.index : line_end].strip()
+                directive = stripped.split(None, 1)[0] if stripped else ""
+                if directive in {"#if", "#elif", "#else", "#endif", "#nowarn", "#warnon"}:
+                    value = {"full_length": line_end - line_start}
+        return Token(TokenKind.WHITESPACE, value, range_, text)
+
+    def is_line_directive_position(self) -> bool:
+        line_start = self.source.rfind("\n", 0, self.index) + 1
+        return all(ch in " \t" for ch in self.source[line_start : self.index])
 
     def scan_special_word(self) -> Token | None:
         specials = {
@@ -312,9 +336,12 @@ class RawLexer:
         r = self.advance(text)
         if self.index < len(self.source) and self.source[self.index] == "!":
             bang_range = self.range_for("!")
+            self.advance("!")
+            full_range = Range(r.start, bang_range.end)
+            full_text = text + "!"
             if keyword_or_identifier(text, r).kind == TokenKind.LET:
-                self.advance("!")
                 return Token(TokenKind.BINDER, text, Range(r.start, bang_range.end), text + "!")
+            return keyword_or_identifier(full_text, full_range)
         return keyword_or_identifier(text, r)
 
     def scan_number(self) -> Token | None:
@@ -322,6 +349,16 @@ class RawLexer:
         xmatch = XINT_RE.match(text)
         fmatch = FLOAT_RE.match(text)
         imatch = INT_RE.match(text)
+        if imatch and text.startswith("..", imatch.end()):
+            base = imatch.group(0)
+            full = base + ".."
+            r = self.advance(full)
+            try:
+                value = checked_signed(parse_based_int(base), 32)
+                return Token(TokenKind.INT32_DOT_DOT, value, r, full)
+            except Exception as ex:
+                self.args.diagnostics.error("FSLEX_NUMERIC", str(ex), r)
+                return Token(TokenKind.LEX_FAILURE, "Invalid numeric literal", r, full)
         candidates: list[tuple[str, str]] = []
         if xmatch:
             candidates.append(("xint", xmatch.group(0)))
@@ -477,6 +514,9 @@ class RawLexer:
 
     def scan_backtick_identifier(self) -> Token:
         start = self.index
+        if not self.startswith("``"):
+            r = self.advance("`")
+            return Token(TokenKind.IDENT, "`", r, "`")
         end = self.source.find("``", start + 2)
         if end < 0:
             text = self.source[start:]
@@ -496,12 +536,20 @@ class RawLexer:
         chunks: list[Token] = []
         i = start
         while i < end:
+            if self.source[i] == "\n":
+                i += 1
+                continue
             if self.source.startswith("///", i):
                 j = i + 3
             elif (
                 self.source.startswith("//", i)
-                or self.source.startswith("(*", i)
-                or self.source.startswith("*)", i)
+                or (
+                    kind != TokenKind.LINE_COMMENT
+                    and (
+                        self.source.startswith("(*", i)
+                        or self.source.startswith("*)", i)
+                    )
+                )
             ):
                 j = i + 2
             elif self.source[i] in " \t":
@@ -513,8 +561,13 @@ class RawLexer:
                 while (
                     j < end
                     and self.source[j] not in " \t\n"
-                    and not self.source.startswith("(*", j)
-                    and not self.source.startswith("*)", j)
+                    and (
+                        kind == TokenKind.LINE_COMMENT
+                        or (
+                            not self.source.startswith("(*", j)
+                            and not self.source.startswith("*)", j)
+                        )
+                    )
                 ):
                     j += 1
             chunks.append(self.token_for_span(kind, i, j))
@@ -522,7 +575,12 @@ class RawLexer:
         return chunks
 
     def split_string_text_chunks(
-        self, start: int, end: int, *, escape_backslash: bool = True
+        self,
+        start: int,
+        end: int,
+        *,
+        escape_backslash: bool = True,
+        doubled_quote_escape: bool = False,
     ) -> list[Token]:
         chunks: list[Token] = []
         i = start
@@ -535,29 +593,33 @@ class RawLexer:
                 j = i + 1
                 while j < end and self.source[j] in " \t":
                     j += 1
-            elif escape_backslash and ch == "\\" and i + 1 < end:
+            elif self.source.startswith("{{", i) or self.source.startswith("}}", i):
                 j = i + 2
+            elif doubled_quote_escape and self.source.startswith('""', i):
+                j = i + 2
+            elif escape_backslash and ch == "\\":
+                j = min(i + self.escape_len(i), end)
             elif ch == "%":
                 j = i + 1
                 while j < end and self.source[j] == "%":
                     j += 1
-            elif ch.isdigit():
-                j = i + 1
-                while j < end and self.source[j].isdigit():
-                    j += 1
-            elif ch.isalpha() or ch == "_":
-                j = i + 1
-                while j < end and (self.source[j].isalpha() or self.source[j] == "_"):
-                    j += 1
             else:
-                j = i + 1
+                j = self.match_string_text_word_end(i, end)
             chunks.append(self.token_for_span(TokenKind.STRING_TEXT, i, j))
             i = j
         return chunks
 
+    def match_string_text_word_end(self, start: int, end: int) -> int:
+        matches = [
+            match.end()
+            for regex_ in (IDENT_RE, INT_RE, XINT_RE)
+            if (match := regex_.match(self.source, start)) and match.end() <= end
+        ]
+        return max(matches, default=start + 1)
+
     def add_interpolated_chunks(
         self, chunks: list[Token], content_start: int, content_end: int, delimiter_len: int
-    ) -> None:
+    ) -> bool:
         i = content_start
         first = True
         text_start = i
@@ -567,6 +629,11 @@ class RawLexer:
                 i += 1
                 text_start = i
                 continue
+            if delimiter_len == 1 and (
+                self.source.startswith("{{", i) or self.source.startswith("}}", i)
+            ):
+                i += 2
+                continue
             if self.source.startswith("{" * delimiter_len, i):
                 chunks.extend(self.split_string_text_chunks(text_start, i))
                 open_end = i + delimiter_len
@@ -575,8 +642,9 @@ class RawLexer:
                 close = self.source.find("}" * delimiter_len, open_end)
                 if close < 0 or close > content_end:
                     chunks.extend(self.split_string_text_chunks(open_end, content_end))
-                    return
-                self.add_interpolation_expr_chunks(chunks, open_end, close)
+                    return False
+                if not self.add_interpolation_expr_chunks(chunks, open_end, close):
+                    return False
                 for brace_index in range(close, close + delimiter_len):
                     chunks.append(
                         self.token_for_span(TokenKind.STRING_TEXT, brace_index, brace_index + 1)
@@ -587,12 +655,41 @@ class RawLexer:
             else:
                 i += 1
         chunks.extend(self.split_string_text_chunks(text_start, content_end))
+        return True
 
-    def add_interpolation_expr_chunks(self, chunks: list[Token], start: int, end: int) -> None:
+    def add_interpolation_expr_chunks(self, chunks: list[Token], start: int, end: int) -> bool:
         i = start
         while i < end:
-            if self.source[i] in " \t\n":
+            if self.source[i] in " \t":
+                j = i + 1
+                while j < end and self.source[j] in " \t":
+                    j += 1
+                chunks.append(self.token_for_span(TokenKind.WHITESPACE, i, j))
+                i = j
+                continue
+            if self.source[i] == "\n":
                 i += 1
+                continue
+            if self.source[i] == '"':
+                close = self.find_regular_string_end(i + 1)
+                close = min(close, end)
+                chunks.append(self.token_for_span(TokenKind.STRING_TEXT, i, i + 1))
+                chunks.extend(self.split_string_text_chunks(i + 1, close))
+                if close < end and self.source[close] == '"':
+                    chunks.append(self.token_for_span(TokenKind.STRING, close, close + 1))
+                    i = close + 1
+                else:
+                    i = close
+                continue
+            if self.source[i] == "\\":
+                return False
+            floating = FLOAT_RE.match(self.source, i)
+            if floating and floating.end() <= end:
+                text = floating.group(0)
+                chunks.append(
+                    self.token_for_span(TokenKind.IEEE64, i, floating.end(), parse_float64(text))
+                )
+                i = floating.end()
                 continue
             ident = IDENT_RE.match(self.source, i)
             if ident and ident.end() <= end:
@@ -613,9 +710,39 @@ class RawLexer:
                 )
                 i = integer.end()
                 continue
+            matched_punctuation = False
+            for text, kind, value in PUNCTUATION:
+                if self.source.startswith(text, i) and i + len(text) <= end:
+                    chunks.append(self.token_for_span(kind, i, i + len(text), value))
+                    i += len(text)
+                    matched_punctuation = True
+                    break
+            if matched_punctuation:
+                continue
+            punctuation_kinds = {
+                "(": TokenKind.LPAREN,
+                ")": TokenKind.RPAREN,
+                "[": TokenKind.LBRACK,
+                "]": TokenKind.RBRACK,
+                ";": TokenKind.SEMICOLON,
+                "+": TokenKind.PLUS_MINUS_OP,
+                "-": TokenKind.MINUS,
+                "*": TokenKind.STAR,
+                ".": TokenKind.DOT,
+                ":": TokenKind.COLON,
+                ",": TokenKind.COMMA,
+            }
+            kind = punctuation_kinds.get(self.source[i])
+            if kind is not None:
+                text = self.source[i : i + 1]
+                value = text if kind in {TokenKind.PLUS_MINUS_OP} else None
+                chunks.append(self.token_for_span(kind, i, i + 1, value))
+                i += 1
+                continue
             # Fall back to normal string text for unsupported interpolation contents.
             chunks.extend(self.split_string_text_chunks(i, end))
-            return
+            return True
+        return True
 
     def find_regular_string_end(self, content_start: int) -> int:
         i = content_start
@@ -628,17 +755,46 @@ class RawLexer:
             i += 1
         return len(self.source)
 
+    def find_interpolated_regular_string_end(self, content_start: int) -> int:
+        i = content_start
+        brace_depth = 0
+        while i < len(self.source):
+            ch = self.source[i]
+            if ch == "\\" and brace_depth == 0:
+                i += max(1, self.escape_len(i))
+                continue
+            if ch == "{":
+                brace_depth += 1
+                i += 1
+                continue
+            if ch == "}" and brace_depth:
+                brace_depth -= 1
+                i += 1
+                continue
+            if ch == '"':
+                if brace_depth == 0:
+                    return i
+                inner_end = self.find_regular_string_end(i + 1)
+                i = min(inner_end + 1, len(self.source))
+                continue
+            i += 1
+        return len(self.source)
+
     def scan_regular_string_tokens(self) -> Token:
         start = self.index
         interpolated = self.startswith('$"')
         opener_len = 2 if interpolated else 1
         content_start = start + opener_len
-        close = self.find_regular_string_end(content_start)
+        close = (
+            self.find_interpolated_regular_string_end(content_start)
+            if interpolated
+            else self.find_regular_string_end(content_start)
+        )
         end = min(close + 1, len(self.source))
         chunks = [self.token_for_span(TokenKind.STRING_TEXT, start, content_start)]
         if interpolated:
-            self.add_interpolated_chunks(chunks, content_start, close, 1)
-            if close < len(self.source):
+            ok = self.add_interpolated_chunks(chunks, content_start, close, 1)
+            if ok and close < len(self.source):
                 chunks.append(self.token_for_span(TokenKind.INTERP_STRING_END, close, end))
         else:
             chunks.extend(self.split_string_text_chunks(content_start, close))
@@ -675,12 +831,14 @@ class RawLexer:
         end = min(close + 1, len(self.source))
         chunks = [self.token_for_span(TokenKind.STRING_TEXT, start, content_start)]
         if interpolated:
-            self.add_interpolated_chunks(chunks, content_start, close, 1)
-            if close < len(self.source):
+            ok = self.add_interpolated_chunks(chunks, content_start, close, 1)
+            if ok and close < len(self.source):
                 chunks.append(self.token_for_span(TokenKind.INTERP_STRING_END, close, end))
         else:
             chunks.extend(
-                self.split_string_text_chunks(content_start, close, escape_backslash=False)
+                self.split_string_text_chunks(
+                    content_start, close, escape_backslash=False, doubled_quote_escape=True
+                )
             )
             if close < len(self.source):
                 chunks.append(self.token_for_span(TokenKind.STRING, close, end))
@@ -703,11 +861,13 @@ class RawLexer:
         end = min(close + 3, len(self.source))
         chunks = [self.token_for_span(TokenKind.STRING_TEXT, start, content_start)]
         if dollar_count:
-            self.add_interpolated_chunks(chunks, content_start, close, dollar_count)
-            if close < len(self.source):
+            ok = self.add_interpolated_chunks(chunks, content_start, close, dollar_count)
+            if ok and close < len(self.source):
                 chunks.append(self.token_for_span(TokenKind.INTERP_STRING_END, close, end))
         else:
-            chunks.extend(self.split_string_text_chunks(content_start, close))
+            chunks.extend(
+                self.split_string_text_chunks(content_start, close, escape_backslash=False)
+            )
             if close < len(self.source):
                 chunks.append(self.token_for_span(TokenKind.STRING, close, end))
         self.index = end
@@ -867,9 +1027,73 @@ class RawLexer:
         return None
 
     def scan_punctuation(self) -> Token | None:
+        multi_operator_kinds = {
+            "-->": TokenKind.PLUS_MINUS_OP,
+            "|>>": TokenKind.INFIX_BAR_OP,
+            "||>": TokenKind.INFIX_BAR_OP,
+            "<|||": TokenKind.INFIX_COMPARE_OP,
+            "<||": TokenKind.INFIX_COMPARE_OP,
+            "<<<": TokenKind.INFIX_COMPARE_OP,
+            "&&&": TokenKind.INFIX_AMP_OP,
+            "|||": TokenKind.INFIX_BAR_OP,
+            "&+": TokenKind.INFIX_AMP_OP,
+            "&%": TokenKind.INFIX_AMP_OP,
+            "%&": TokenKind.INFIX_STAR_DIV_MOD_OP,
+            "<<": TokenKind.INFIX_COMPARE_OP,
+            "<|": TokenKind.INFIX_COMPARE_OP,
+        }
+        for text, kind in multi_operator_kinds.items():
+            if self.startswith(text):
+                r = self.advance(text)
+                return Token(kind, text, r, text)
+        if self.startswith("=>"):
+            r = self.advance("=>")
+            return Token(TokenKind.INFIX_COMPARE_OP, "=>", r, "=>")
+        if self.startswith(">>|"):
+            full_value = {"full_length": 3}
+            chunks = [
+                self.token_for_span(TokenKind.GREATER, self.index, self.index + 1, full_value),
+                self.token_for_span(TokenKind.GREATER, self.index + 1, self.index + 2, full_value),
+                self.token_for_span(
+                    TokenKind.INFIX_BAR_OP, self.index + 2, self.index + 3, full_value
+                ),
+            ]
+            self.advance(">>|")
+            return self.return_chunks(chunks)
+        for text in (">>>", ">>"):
+            if self.startswith(text):
+                full_value = {"full_length": len(text)}
+                chunks = [
+                    self.token_for_span(
+                        TokenKind.GREATER, self.index + offset, self.index + offset + 1, full_value
+                    )
+                    for offset in range(len(text))
+                ]
+                self.advance(text)
+                return self.return_chunks(chunks)
+        if self.startswith("$%"):
+            r = self.advance("$%")
+            return Token(TokenKind.INFIX_STAR_DIV_MOD_OP, "$%", r, "$%")
         if self.startswith("|>"):
             r = self.advance("|>")
             return Token(TokenKind.INFIX_BAR_OP, "|>", r, "|>")
+        if self.startswith(".!"):
+            full_value = {"full_length": 2}
+            chunks = [
+                self.token_for_span(TokenKind.DOT, self.index, self.index + 1, full_value),
+                self.token_for_span(
+                    TokenKind.PREFIX_OP, self.index + 1, self.index + 2, full_value
+                ),
+            ]
+            self.advance(".!")
+            return self.return_chunks(chunks)
+        for text, kind in (
+            ("**", TokenKind.INFIX_STAR_STAR_OP),
+            ("*.", TokenKind.INFIX_STAR_DIV_MOD_OP),
+        ):
+            if self.startswith(text):
+                r = self.advance(text)
+                return Token(kind, text, r, text)
         for text, kind, value in PUNCTUATION:
             if self.startswith(text):
                 r = self.advance(text)
@@ -908,8 +1132,25 @@ class RawLexer:
         if first == "|":
             return Token(TokenKind.INFIX_BAR_OP, text, r, text)
         if first in "!~":
+            if text == "~":
+                return Token(TokenKind.RESERVED, text, r, text)
             return Token(TokenKind.PREFIX_OP, text, r, text)
         return Token(TokenKind.PREFIX_OP, text, r, text)
+
+    def scan_line_directive_name_as_hash(self) -> Token | None:
+        directive_names = ("define", "load", "line", "time", "help", "r", "I")
+        if not self.startswith("#"):
+            return None
+        for name in sorted(directive_names, key=len, reverse=True):
+            if self.source.startswith(name, self.index + 1) and self.boundary(
+                self.index + 1 + len(name)
+            ):
+                r = self.advance("#")
+                self.advance(name)
+                if self.skip_trivia:
+                    return None
+                return Token(TokenKind.HASH, None, r, "#")
+        return None
 
     def scan_directive(self, *, active: bool) -> Token | None | bool:
         line = self.rest_of_line()
@@ -949,20 +1190,37 @@ class RawLexer:
             self.ifdef_stack.pop()
             return None if self.skip_trivia else self.split_directive_tokens(start_index, len(text))
         if directive in {"#nowarn", "#warnon"}:
-            return None if self.skip_trivia else Token(TokenKind.WARN_DIRECTIVE, (r, text), r, text)
+            if self.skip_trivia:
+                return None
+            line_start = self.source.rfind("\n", 0, start_index) + 1
+            return Token(
+                TokenKind.WARN_DIRECTIVE,
+                {"full_length": r.end.index - line_start},
+                r,
+                text,
+            )
         if regex.match(r"#(?:line\s+)?\d+", stripped):
+            line_start = self.source.rfind("\n", 0, start_index) + 1
+            if start_index != line_start:
+                self.index = start_index
+                self.pos = self.position_at(start_index)
+                return False
             return None if self.skip_trivia else Token(TokenKind.HASH_LINE, None, r, text)
         return None
 
     def split_directive_tokens(self, start: int, length: int) -> Token | None:
         end = start + length
-        full_value = {"full_length": length}
+        line_start = self.source.rfind("\n", 0, start) + 1
+        full_value = {"full_length": end - line_start}
         chunks: list[Token] = []
         i = start
+        directive_text = ""
+        emitted_ident = False
         if i < end and self.source[i] == "#":
             j = i + 1
             while j < end and self.source[j].isalpha():
                 j += 1
+            directive_text = self.source[i:j]
             chunks.append(self.token_for_span(TokenKind.HASH_IF, i, j, full_value))
             i = j
         while i < end:
@@ -971,14 +1229,51 @@ class RawLexer:
                 while j < end and self.source[j] in " \t":
                     j += 1
                 # The FCS tokenizer keeps the rest of complex conditional expressions as whitespace.
-                if j < end and not (self.source[j].isalpha() or self.source[j] == "_"):
+                if (
+                    (directive_text in {"#if", "#elif"} and emitted_ident)
+                    or (
+                        j < end
+                        and not (self.source[j].isalpha() or self.source[j] == "_")
+                        and not (
+                            directive_text in {"#if", "#elif"}
+                            and self.source[j] == "("
+                            and j + 1 < end
+                            and regex.match(IDENT_START, self.source[j + 1], regex.VERSION1)
+                        )
+                    )
+                ):
                     j = end
                 chunks.append(self.token_for_span(TokenKind.WHITESPACE, i, j, full_value))
                 i = j
                 continue
             ident = IDENT_RE.match(self.source, i)
             if ident and ident.end() <= end:
+                if (
+                    directive_text in {"#if", "#elif"}
+                    and ident.group(0) == "defined"
+                    and ident.end() < end
+                    and self.source[ident.end()] == "("
+                ):
+                    close = self.source.find(")", ident.end() + 1, end)
+                    if close >= 0:
+                        chunks.append(
+                            self.token_for_span(TokenKind.IDENT, i, close + 1, full_value)
+                        )
+                        emitted_ident = True
+                        i = close + 1
+                        continue
                 chunks.append(self.token_for_span(TokenKind.IDENT, i, ident.end(), full_value))
+                emitted_ident = True
+                i = ident.end()
+                continue
+            if (
+                directive_text in {"#if", "#elif"}
+                and self.source[i] == "("
+                and i + 1 < end
+                and (ident := IDENT_RE.match(self.source, i + 1))
+            ):
+                chunks.append(self.token_for_span(TokenKind.IDENT, i, ident.end(), full_value))
+                emitted_ident = True
                 i = ident.end()
                 continue
             chunks.append(self.token_for_span(TokenKind.WHITESPACE, i, end, full_value))
@@ -988,10 +1283,34 @@ class RawLexer:
     def scan_inactive(self) -> Token | None:
         if self.index >= len(self.source):
             return None
-        if self.pos.column == 0 and self.source[self.index] == "#":
-            directive = self.scan_directive(active=False)
-            if directive is not False:
-                return directive
+        if self.source[self.index] in " \t":
+            line_start = self.source.rfind("\n", 0, self.index) + 1
+            if self.index == line_start:
+                j = self.index
+                while j < len(self.source) and self.source[j] in " \t":
+                    j += 1
+                line_end = self.source.find("\n", j)
+                if line_end < 0:
+                    line_end = len(self.source)
+                stripped = self.source[j:line_end].strip()
+                name = stripped.split(None, 1)[0] if stripped else ""
+                if name in {"#if", "#elif", "#else", "#endif"}:
+                    r = self.advance(self.source[self.index:j])
+                    if self.skip_trivia:
+                        return None
+                    return Token(
+                        TokenKind.WHITESPACE,
+                        {"full_length": line_end - line_start},
+                        r,
+                        self.source[r.start.index : r.end.index],
+                    )
+        if self.is_line_directive_position() and self.source[self.index] == "#":
+            stripped = self.rest_of_line().strip()
+            name = stripped.split(None, 1)[0] if stripped else ""
+            if name in {"#if", "#elif", "#else", "#endif"}:
+                directive = self.scan_directive(active=False)
+                if directive is not False:
+                    return directive
         text = self.rest_of_line()
         if not text and self.startswith("\n"):
             text = "\n"
@@ -1015,18 +1334,24 @@ class RawLexer:
                 while j < end and self.source[j] in " \t":
                     j += 1
             elif self.source[i] == '"':
-                j = i + 1
-                while j < end:
-                    if self.source[j] == "\\" and j + 1 < end:
-                        j += 2
-                    elif self.source[j] == '"':
+                close = self.source.find('"', i + 1, end)
+                if close >= 0 and not any(ch in " \t" for ch in self.source[i + 1 : close]):
+                    j = close + 1
+                else:
+                    j = i + 1
+                    while j < end and self.source[j] not in " \t\n":
                         j += 1
-                        break
-                    else:
-                        j += 1
+            elif self.source[i] == "#" and i + 1 < end and self.source[i + 1].isalpha():
+                j = i + 2
+                while j < end and (self.source[j].isalnum() or self.source[j] == "_"):
+                    j += 1
             elif self.source[i].isalpha() or self.source[i] == "_":
                 j = i + 1
-                while j < end and (self.source[j].isalnum() or self.source[j] == "_"):
+                while j < end and (
+                    self.source[j].isalnum() or self.source[j] == "_" or self.source[j] == "."
+                ):
+                    j += 1
+                if j < end and self.source[j] == '"':
                     j += 1
             elif self.source[i].isdigit():
                 j = i + 1

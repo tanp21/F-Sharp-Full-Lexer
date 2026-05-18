@@ -219,6 +219,10 @@ def escape_lexeme(text: str) -> str:
     return text.replace("\\", "\\\\").replace("\t", "\\t").replace("\r", "\\r").replace("\n", "\\n")
 
 
+def utf16_length(text: str) -> int:
+    return sum(2 if ord(ch) > 0xFFFF else 1 for ch in text)
+
+
 def format_official_token(token: Token) -> str | None:
     if token.kind == TokenKind.EOF or token.range is None:
         return None
@@ -232,7 +236,7 @@ def format_official_token(token: Token) -> str | None:
     full_length = (
         token.value["full_length"]
         if isinstance(token.value, dict) and "full_length" in token.value
-        else len(token.text)
+        else utf16_length(token.text)
     )
 
     return (

@@ -17,7 +17,7 @@ class Position:
                 line += 1
                 column = 0
             else:
-                column += 1
+                column += 2 if ord(ch) > 0xFFFF else 1
         return Position(self.index + len(text), line, column)
 
 

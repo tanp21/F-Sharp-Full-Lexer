@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from fsharp_full_lexer.generate import TARGETS, render_target
 from fslexpy.generator import generate_text
 from fslexpy.parser import parse_fsl
 from fslexpy.runtime import LexBuffer
@@ -65,3 +66,10 @@ def test_official_fsharp_specs_are_generated():
     generated = Path("src/fsharp_full_lexer/generated")
     assert (generated / "lexer_tables.py").exists()
     assert (generated / "pplexer_tables.py").exists()
+
+
+def test_official_fsharp_generated_tables_match_sources():
+    for input_path, output_path, module_name in TARGETS:
+        assert output_path.read_text(encoding="utf-8") == render_target(
+            input_path, module_name
+        )

@@ -16,6 +16,25 @@ F# lexer rule source:
 - `fsharp/src/Compiler/lex.fsl`
 - `fsharp/src/Compiler/pplex.fsl`
 
+## Codebase Structure
+
+```text
+src/fsharp_full_lexer/        Python F# lexer package and CLI entry points
+src/fsharp_full_lexer/generated/
+                              generated lexer table modules from F# specs
+src/fslexpy/                  FsLex-style scanner/parser and table generator
+tests/                        pytest suite
+tests/fixtures/               small F# fixture files
+tests/fixtures/manual_tests/  larger stress fixtures used for parity checks
+tests/output/lexer-diff/      official/Python token outputs and diffs
+tools/OfficialTokenizer/      F# runner for the official FSharp.Compiler.Service tokenizer
+fsharp/                       vendored/upstream F# compiler source used by the runner
+```
+
+The handwritten compatibility layer currently lives mostly in
+`src/fsharp_full_lexer/lexer.py`, while formatting for official token comparison
+is in `src/fsharp_full_lexer/official_format.py`.
+
 Run tests:
 
 ```bash
@@ -47,8 +66,8 @@ dotnet run -c Proto --project tools/OfficialTokenizer -- tests/fixtures/core_mod
 dotnet build FsLexYacc/FsLexYacc.sln
 dotnet build fsharp/FSharp.Compiler.Service.slnx
 uv run pytest
-uv run fsharp-lexer-generate --check
 uv run fsharp-lexer-diff tests/fixtures/core_module.fs
+uv run fsharp-lexer-generate --check
 ```
 
 The .NET 6 SDK is explicitly permitted in `flake.nix` because
@@ -101,6 +120,10 @@ Or let the helper run both sides and write generated comparison files:
 uv run fsharp-lexer-diff tests/fixtures/core_module.fs
 uv run fsharp-lexer-diff --define RELEASE tests/fixtures/preprocessor.fs
 ```
+
+`uv run pytest`, `fsharp-lexer-diff`, and `tools/test_fs_fixtures.py` regenerate
+the official F# lexer tables from `fsharp/src/Compiler/lex.fsl` and `pplex.fsl`
+before comparing lexer behavior.
 
 This writes:
 

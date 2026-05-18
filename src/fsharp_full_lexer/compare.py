@@ -6,8 +6,20 @@ import subprocess
 import sys
 from pathlib import Path
 
-from .api import tokenize
+from .generate import generate_all
 from .official_format import format_official_tokens
+
+_generated_tables_ready = False
+
+
+def ensure_generated_tables() -> None:
+    global _generated_tables_ready
+    if _generated_tables_ready:
+        return
+    failures = generate_all(check=False)
+    if failures:
+        raise RuntimeError("failed to generate lexer tables from official F# specs")
+    _generated_tables_ready = True
 
 
 def official_command(path: Path, defines: list[str]) -> list[str]:
@@ -19,6 +31,9 @@ def official_command(path: Path, defines: list[str]) -> list[str]:
 
 
 def python_tokens(path: Path, defines: list[str]) -> str:
+    ensure_generated_tables()
+    from .api import tokenize
+
     source = path.read_text(encoding="utf-8-sig")
     tokens = tokenize(source, defines=defines, skip_trivia=False, use_lex_filter=False)
     return format_official_tokens(tokens)
