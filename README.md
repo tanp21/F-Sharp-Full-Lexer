@@ -201,3 +201,5 @@ F# lexer rule source:
 
 - `fsharp/src/Compiler/lex.fsl`
 - `fsharp/src/Compiler/pplex.fsl`
+
+We also present the code into Github via this [link](https://github.com/tanp21/F-Sharp-Full-Lexer).
