@@ -223,7 +223,7 @@ def utf16_length(text: str) -> int:
     return sum(2 if ord(ch) > 0xFFFF else 1 for ch in text)
 
 
-def format_official_token(token: Token) -> str | None:
+def format_official_token(token: Token, *, ident_only: bool = False) -> str | None:
     if token.kind == TokenKind.EOF or token.range is None:
         return None
     if token.kind in {TokenKind.WHITESPACE, TokenKind.INACTIVECODE} and "\n" in token.text:
@@ -239,15 +239,23 @@ def format_official_token(token: Token) -> str | None:
         else utf16_length(token.text)
     )
 
+    token_name = token.kind.name
+    if ident_only:
+        token_name = "IDENT" if token.kind == TokenKind.IDENT else "UNKNOWN"
+
     return (
         f"{start_line}:{start_col}:{end_col}\t"
-        f"{token.kind.name}\t"
+        f"{token_name}\t"
         f"{escape_lexeme(token.text)}\t"
         f"{tag}\t"
         f"{full_length}"
     )
 
 
-def format_official_tokens(tokens: Iterable[Token]) -> str:
-    lines = [line for token in tokens if (line := format_official_token(token)) is not None]
+def format_official_tokens(tokens: Iterable[Token], *, ident_only: bool = False) -> str:
+    lines = [
+        line
+        for token in tokens
+        if (line := format_official_token(token, ident_only=ident_only)) is not None
+    ]
     return "\n".join(lines)

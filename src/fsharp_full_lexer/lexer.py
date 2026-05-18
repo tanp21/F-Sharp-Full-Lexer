@@ -516,15 +516,45 @@ class RawLexer:
         start = self.index
         if not self.startswith("``"):
             r = self.advance("`")
-            return Token(TokenKind.IDENT, "`", r, "`")
-        end = self.source.find("``", start + 2)
-        if end < 0:
-            text = self.source[start:]
+            return Token(TokenKind.IDENT, "", r, "`")
+
+        i = start + 2
+        end = len(self.source)
+
+        # Consume content that matches: [^`\n\r\t] | ` (?!`)
+        while i < end:
+            ch = self.source[i]
+            if ch in "\n\r\t":
+                break
+            if ch == "`":
+                if i + 1 < end and self.source[i + 1] == "`":
+                    break
+            i += 1
+
+        content_end = i
+        if content_end == start + 2:
+            if self.startswith("````"):
+                text = "````"
+            elif self.startswith("```"):
+                text = "```"
+            else:
+                text = "``"
             r = self.advance(text)
-            return Token(TokenKind.IDENT, text[2:], r, text)
-        text = self.source[start : end + 2]
+            return Token(TokenKind.IDENT, "", r, text)
+
+        if self.source.startswith("``", content_end):
+            text = self.source[start : content_end + 2]
+            r = self.advance(text)
+            return Token(TokenKind.IDENT, text[2:-2], r, text)
+
+        if self.source.startswith("`", content_end):
+            text = self.source[start : content_end + 1]
+            r = self.advance(text)
+            return Token(TokenKind.IDENT, text[2:-1], r, text)
+
+        text = self.source[start:content_end]
         r = self.advance(text)
-        return Token(TokenKind.IDENT, text[2:-2], r, text)
+        return Token(TokenKind.IDENT, text[2:], r, text)
 
     def return_chunks(self, chunks: list[Token]) -> Token | None:
         if not chunks:
@@ -541,15 +571,9 @@ class RawLexer:
                 continue
             if self.source.startswith("///", i):
                 j = i + 3
-            elif (
-                self.source.startswith("//", i)
-                or (
-                    kind != TokenKind.LINE_COMMENT
-                    and (
-                        self.source.startswith("(*", i)
-                        or self.source.startswith("*)", i)
-                    )
-                )
+            elif self.source.startswith("//", i) or (
+                kind != TokenKind.LINE_COMMENT
+                and (self.source.startswith("(*", i) or self.source.startswith("*)", i))
             ):
                 j = i + 2
             elif self.source[i] in " \t":
@@ -1229,17 +1253,14 @@ class RawLexer:
                 while j < end and self.source[j] in " \t":
                     j += 1
                 # The FCS tokenizer keeps the rest of complex conditional expressions as whitespace.
-                if (
-                    (directive_text in {"#if", "#elif"} and emitted_ident)
-                    or (
-                        j < end
-                        and not (self.source[j].isalpha() or self.source[j] == "_")
-                        and not (
-                            directive_text in {"#if", "#elif"}
-                            and self.source[j] == "("
-                            and j + 1 < end
-                            and regex.match(IDENT_START, self.source[j + 1], regex.VERSION1)
-                        )
+                if (directive_text in {"#if", "#elif"} and emitted_ident) or (
+                    j < end
+                    and not (self.source[j].isalpha() or self.source[j] == "_")
+                    and not (
+                        directive_text in {"#if", "#elif"}
+                        and self.source[j] == "("
+                        and j + 1 < end
+                        and regex.match(IDENT_START, self.source[j + 1], regex.VERSION1)
                     )
                 ):
                     j = end
@@ -1295,7 +1316,7 @@ class RawLexer:
                 stripped = self.source[j:line_end].strip()
                 name = stripped.split(None, 1)[0] if stripped else ""
                 if name in {"#if", "#elif", "#else", "#endif"}:
-                    r = self.advance(self.source[self.index:j])
+                    r = self.advance(self.source[self.index : j])
                     if self.skip_trivia:
                         return None
                     return Token(

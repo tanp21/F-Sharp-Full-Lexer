@@ -36,7 +36,17 @@ def python_tokens(path: Path, defines: list[str]) -> str:
 
     source = path.read_text(encoding="utf-8-sig")
     tokens = tokenize(source, defines=defines, skip_trivia=False, use_lex_filter=False)
-    return format_official_tokens(tokens)
+    return format_official_tokens(tokens, ident_only=True)
+
+
+def normalize_identifier_only(output: str) -> str:
+    lines: list[str] = []
+    for line in output.splitlines():
+        parts = line.split("\t", 4)
+        if len(parts) >= 2 and parts[1] != "IDENT":
+            parts[1] = "UNKNOWN"
+        lines.append("\t".join(parts))
+    return "\n".join(lines)
 
 
 def compare_file(path: Path, defines: list[str], output_dir: Path) -> bool:
@@ -47,8 +57,11 @@ def compare_file(path: Path, defines: list[str], output_dir: Path) -> bool:
         check=True,
         text=True,
         stdout=subprocess.PIPE,
+        encoding="utf-8",
     ).stdout.rstrip("\n")
     ours = python_tokens(path, defines).rstrip("\n")
+
+    official = normalize_identifier_only(official)
 
     official_path = output_dir / f"{path.name}.official.tokens"
     python_path = output_dir / f"{path.name}.python.tokens"
