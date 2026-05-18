@@ -1,47 +1,53 @@
-# F# Full Lexer
+# F# Identifier Lexer
 
-Python implementation of an FsLex-style lexer generator plus generated F# lexer
-tables from the official F# compiler lexer specs.
+- Course: Principal of Programming Language (CS320).
+- Students' name and ID:
+    - Lê Tiến Đạt: 23125028
+    - Lê Đức Tùng Dương: 23125081
+    - Phạm Đức Duy: 23125032
+    - Phạm Nguyễn Anh Tài: 23125016.
 
-Generator reference:
+We propose a Python implementation of an FsLex-style lexer generator, focusing explicitly on lexing **F# Identifiers**.
 
-- `FsLexYacc/src/FsLex.Core/fslexast.fs`
-- `FsLexYacc/src/FsLex.Core/fslexdriver.fs`
-- `FsLexYacc/src/FsLex.Core/fslexlex.fsl`
-- `FsLexYacc/src/FsLex.Core/fslexpars.fsy`
-- `FsLexYacc/src/FsLexYacc.Runtime/Lexing.fs`
+**Scope Update:** We have adopted the original F# Lexer and shifted our focus from a "lexer for all" approach to a more specialized implementation that only targets F# identifiers. This allows for more precise alignment with F# identifier specifications.
 
-F# lexer rule source:
+## Quick Start
 
-- `fsharp/src/Compiler/lex.fsl`
-- `fsharp/src/Compiler/pplex.fsl`
+For a quick evaluation of the lexer's output on a sample identifier file, simply run:
+
+```bash
+uv run fsharp-lexer tests/fixtures/manual_tests/ident.fs
+```
+
+This will run our Python lexer implementation and output the recognized identifier tokens directly to the console.
 
 ## Codebase Structure
 
+Our codebase is structured to isolate our Python lexer implementation from the official C#-based F# tooling, making it easier to generate tables and test them.
+
 ```text
-src/fsharp_full_lexer/        Python F# lexer package and CLI entry points
-src/fsharp_full_lexer/generated/
-                              generated lexer table modules from F# specs
-src/fslexpy/                  FsLex-style scanner/parser and table generator
-tests/                        pytest suite
-tests/fixtures/               small F# fixture files
-tests/fixtures/manual_tests/  larger stress fixtures used for parity checks
-tests/output/lexer-diff/      official/Python token outputs and diffs
-tools/OfficialTokenizer/      F# runner for the official FSharp.Compiler.Service tokenizer
-fsharp/                       vendored/upstream F# compiler source used by the runner
+.
+├── fsharp/                       # Vendored/upstream F# compiler source used by the runner
+├── src/
+│   ├── fsharp_full_lexer/        # Python F# lexer package and CLI entry points (Our core identifier lexer)
+│   │   └── generated/            # Generated lexer table modules from official F# specs
+│   └── fslexpy/                  # FsLex-style scanner/parser and table generator
+├── tests/                        # pytest suite for unit testing our lexer's accuracy
+│   ├── fixtures/                 # Small F# fixture files for edge cases
+│   │   └── manual_tests/         # Larger stress fixtures (like ident.fs) used for parity checks
+│   └── output/
+│       └── lexer-diff/           # Output directory for both official and Python token outputs, and their diffs
+└── tools/
+    └── OfficialTokenizer/        # F# runner for the official FSharp.Compiler.Service tokenizer
 ```
 
 The handwritten compatibility layer currently lives mostly in
 `src/fsharp_full_lexer/lexer.py`, while formatting for official token comparison
 is in `src/fsharp_full_lexer/official_format.py`.
 
-Run tests:
+## Comparison Guide (Testing & Parity)
 
-```bash
-UV_CACHE_DIR=/tmp/uv-cache uv run pytest
-```
-
-## Nix + direnv
+### How to initialize the code and run the comparison
 
 This repo includes a Nix flake and `.envrc` for a reproducible dev shell:
 
@@ -59,16 +65,46 @@ The shell provides:
 
 Useful checks inside the shell:
 
-```bash
-dotnet --info
-dotnet publish fsharp/proto.proj /restore /p:Configuration=Proto /p:DotNetBuild=false /p:DotNetBuildSourceOnly=false /p:IgnoreMibc=true /p:NoOptimizationData=true
-dotnet run -c Proto --project tools/OfficialTokenizer -- tests/fixtures/core_module.fs
-dotnet build FsLexYacc/FsLexYacc.sln
-dotnet build fsharp/FSharp.Compiler.Service.slnx
-uv run pytest
-uv run fsharp-lexer-diff tests/fixtures/core_module.fs
-uv run fsharp-lexer-generate --check
-```
+1. **Check your .NET installation:**
+   ```bash
+   dotnet --info
+   ```
+
+2. **Build the official F# compiler bootstrap tools:**
+   *(This is required once before using the official tokenizer runner)*
+   ```bash
+   dotnet publish fsharp/proto.proj /restore /p:Configuration=Proto /p:DotNetBuild=false /p:DotNetBuildSourceOnly=false /p:IgnoreMibc=true /p:NoOptimizationData=true
+   ```
+
+3. **Run the official tokenizer on a test file:**
+   ```bash
+   dotnet run -c Proto --project tools/OfficialTokenizer -- tests/fixtures/manual_tests/ident.fs
+   ```
+
+4. **Build the FsLexYacc project:**
+   ```bash
+   dotnet build FsLexYacc/FsLexYacc.sln
+   ```
+
+5. **Build the FSharp Compiler Service:**
+   ```bash
+   dotnet build fsharp/FSharp.Compiler.Service.slnx
+   ```
+
+6. **Run our Python lexer unit tests:**
+   ```bash
+   uv run pytest
+   ```
+
+7. **Run the lexer diff tool for output comparison:**
+   ```bash
+   uv run fsharp-lexer-diff tests/fixtures/manual_tests/ident.fs
+   ```
+
+8. **Regenerate and check official F# lexer tables:**
+   ```bash
+   uv run fsharp-lexer-generate --check
+   ```
 
 The .NET 6 SDK is explicitly permitted in `flake.nix` because
 `FsLexYacc/global.json` pins the 6.0 SDK line.
@@ -85,85 +121,52 @@ dotnet publish fsharp/proto.proj /restore \
   /p:NoOptimizationData=true
 ```
 
-Run the official FSharp.Compiler.Service tokenizer from `fsharp/` on a file:
+### Examples
+
+We strictly test our code (lexer) *before* comparing the output with the original official compiler's lexer. We run our test suite using `pytest`:
 
 ```bash
-dotnet run -c Proto --project tools/OfficialTokenizer -- tests/fixtures/core_module.fs
+UV_CACHE_DIR=/tmp/uv-cache uv run pytest
 ```
 
-The output format is:
+When you are ready to evaluate exact token parity against the official F# lexer specs, use the comparison helper tool `fsharp-lexer-diff`. This command regenerates the official tables, evaluates the file using our python lexer, and then uses the local official F# compiler bootstrap tool to check the same file, outputting differences if any exist.
+
+Run the official tokenizer comparison on a manual test file like `ident.fs`:
+
+```bash
+uv run fsharp-lexer-diff tests/fixtures/manual_tests/ident.fs
+```
+
+This writes the output for our lexer and the official lexer to the following path:
+`tests/output/lexer-diff/`
+
+The generated files for `ident.fs` will be:
+```text
+tests/output/lexer-diff/ident.fs.official.tokens
+tests/output/lexer-diff/ident.fs.python.tokens
+tests/output/lexer-diff/ident.fs.diff
+```
+
+The output format within these `.tokens` files looks like this:
 
 ```text
 line:start_col:end_col<TAB>TOKEN_NAME<TAB>lexeme<TAB>tag<TAB>full_matched_length
 ```
 
-You can pass conditional defines like this:
-
-```bash
-dotnet run -c Proto --project tools/OfficialTokenizer -- --define RELEASE tests/fixtures/preprocessor.fs
+For instance, an identifier declaration in `tests/fixtures/manual_tests/ident.fs`:
+```fsharp
+let simple = 1
 ```
 
-For a side-by-side check against the Python lexer, write both outputs to files:
-
-```bash
-dotnet run -c Proto --project tools/OfficialTokenizer -- tests/fixtures/core_module.fs > /tmp/official.tokens
-uv run fsharp-lexer --trivia --raw tests/fixtures/core_module.fs > /tmp/python.tokens
-```
-
-The official tokenizer API is line-oriented and emits editor-facing trivia
-tokens. Use `--trivia --raw` on the Python side when you want the closest
-comparison surface.
-
-Or let the helper run both sides and write generated comparison files:
-
-```bash
-uv run fsharp-lexer-diff tests/fixtures/core_module.fs
-uv run fsharp-lexer-diff --define RELEASE tests/fixtures/preprocessor.fs
-```
-
-`uv run pytest`, `fsharp-lexer-diff`, and `tools/test_fs_fixtures.py` regenerate
-the official F# lexer tables from `fsharp/src/Compiler/lex.fsl` and `pplex.fsl`
-before comparing lexer behavior.
-
-This writes:
-
+Might produce output resembling (depending on tokens included):
 ```text
-tests/output/lexer-diff/<file>.official.tokens
-tests/output/lexer-diff/<file>.python.tokens
-tests/output/lexer-diff/<file>.diff
+8:4:10	IDENT	simple	tag	6
 ```
 
-The command exits with status `1` if the outputs differ.
+The command exits with status `1` if our output and the official output differ, letting us perfectly tune identifier edge cases (e.g. `` `backtick identifiers` ``, unicode variables, and weird connectors) against the spec.
 
-Regenerate official F# lexer tables:
 
-```bash
-UV_CACHE_DIR=/tmp/uv-cache uv run fsharp-lexer-generate
-UV_CACHE_DIR=/tmp/uv-cache uv run fsharp-lexer-generate --check
-```
-
-Generate a lexer table module from any `.fsl` file:
-
-```bash
-UV_CACHE_DIR=/tmp/uv-cache uv run fslexpy path/to/Lexer.fsl -o generated_lexer.py
-```
-
-Tokenize a file:
-
-```bash
-UV_CACHE_DIR=/tmp/uv-cache uv run fsharp-lexer path/to/file.fs
-```
-
-By default `fsharp-lexer` emits the same tab-separated shape as
-`tools/OfficialTokenizer`:
-
-```text
-line:start_col:end_col<TAB>TOKEN_NAME<TAB>lexeme<TAB>tag<TAB>full_matched_length
-```
-
-Use `--json` for the older debug JSON output.
-
-## Coverage
+### Coverage
 
 `src/fslexpy/` contains a Python clone of the core FsLexYacc pipeline:
 
@@ -177,7 +180,24 @@ Use `--json` for the older debug JSON output.
 `src/fsharp_full_lexer/generated/` contains generated table modules for the
 official F# `lex.fsl` and `pplex.fsl`.
 
-The remaining work for exact F# token parity is semantic action binding: the
-generated tables preserve action IDs and original F# action source text, but the
-arbitrary F# action blocks still need full Python ports before the generated
-tables can replace every hand-written token action.
+Since we are focusing strictly on Identifiers, the remaining work is ensuring that our F# token parity correctly captures every possible identifier variation matching the F# language specification without worrying about unrelated language grammar syntax.
+
+## References:
+
+We adapt the code from two main sources:
+
+- [FsLexYacc](https://github.com/fsprojects/FsLexYacc.git): The original F# Lexer. 
+- [dotnet/fsharp](https://github.com/dotnet/fsharp.git): The F# compiler, F# core library, and F# editor tools. 
+
+Generator reference:
+
+- `FsLexYacc/src/FsLex.Core/fslexast.fs`
+- `FsLexYacc/src/FsLex.Core/fslexdriver.fs`
+- `FsLexYacc/src/FsLex.Core/fslexlex.fsl`
+- `FsLexYacc/src/FsLex.Core/fslexpars.fsy`
+- `FsLexYacc/src/FsLexYacc.Runtime/Lexing.fs`
+
+F# lexer rule source:
+
+- `fsharp/src/Compiler/lex.fsl`
+- `fsharp/src/Compiler/pplex.fsl`
