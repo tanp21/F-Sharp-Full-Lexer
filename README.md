@@ -202,4 +202,7 @@ F# lexer rule source:
 - `fsharp/src/Compiler/lex.fsl`
 - `fsharp/src/Compiler/pplex.fsl`
 
-We also present the code into Github via this [link](https://github.com/tanp21/F-Sharp-Full-Lexer).
+We also present the code into Github via this [link](https://github.com/tanp21/F-Sharp-Full-Lexer). Currently we have two branches:
+**main** and **identifier_only**. We handle both the branch with full implementation:
+- **main**: implements full lexer, including keywords, identifiers, etc.
+- **identifier_only**: implements lexer for identifiers only.
