@@ -2,10 +2,10 @@
 
 - Course: Principal of Programming Language (CS320).
 - Students' name and ID:
-    - Lê Tiến Đạt: 23125028
-    - Lê Đức Tùng Dương: 23125081
-    - Phạm Đức Duy: 23125032
-    - Phạm Nguyễn Anh Tài: 23125016.
+  - Lê Tiến Đạt: 23125028
+  - Lê Đức Tùng Dương: 23125081
+  - Phạm Đức Duy: 23125032
+  - Phạm Nguyễn Anh Tài: 23125016.
 
 We propose a Python implementation of an FsLex-style lexer generator, focusing explicitly on lexing **F# Identifiers**.
 
@@ -16,7 +16,7 @@ We propose a Python implementation of an FsLex-style lexer generator, focusing e
 For a quick evaluation of the lexer's output on a sample identifier file, simply run:
 
 ```bash
-uv run fsharp-lexer tests/fixtures/manual_tests/ident.fs
+uv run fsharp-lexer tests/ident.fs
 ```
 
 This will run our Python lexer implementation and output the recognized identifier tokens directly to the console.
@@ -33,8 +33,6 @@ Our codebase is structured to isolate our Python lexer implementation from the o
 │   │   └── generated/            # Generated lexer table modules from official F# specs
 │   └── fslexpy/                  # FsLex-style scanner/parser and table generator
 ├── tests/                        # pytest suite for unit testing our lexer's accuracy
-│   ├── fixtures/                 # Small F# fixture files for edge cases
-│   │   └── manual_tests/         # Larger stress fixtures (like ident.fs) used for parity checks
 │   └── output/
 │       └── lexer-diff/           # Output directory for both official and Python token outputs, and their diffs
 └── tools/
@@ -66,39 +64,46 @@ The shell provides:
 Useful checks inside the shell:
 
 1. **Check your .NET installation:**
+
    ```bash
    dotnet --info
    ```
 
 2. **Build the official F# compiler bootstrap tools:**
-   *(This is required once before using the official tokenizer runner)*
+   _(This is required once before using the official tokenizer runner)_
+
    ```bash
    dotnet publish fsharp/proto.proj /restore /p:Configuration=Proto /p:DotNetBuild=false /p:DotNetBuildSourceOnly=false /p:IgnoreMibc=true /p:NoOptimizationData=true
    ```
 
 3. **Run the official tokenizer on a test file:**
+
    ```bash
-   dotnet run -c Proto --project tools/OfficialTokenizer -- tests/fixtures/manual_tests/ident.fs
+   dotnet run -c Proto --project tools/OfficialTokenizer -- tests/ident.fs
    ```
 
 4. **Build the FsLexYacc project:**
+
    ```bash
    dotnet build FsLexYacc/FsLexYacc.sln
    ```
 
 5. **Build the FSharp Compiler Service:**
+
    ```bash
    dotnet build fsharp/FSharp.Compiler.Service.slnx
    ```
 
 6. **Run our Python lexer unit tests:**
+
    ```bash
    uv run pytest
    ```
 
 7. **Run the lexer diff tool for output comparison:**
+
    ```bash
-   uv run fsharp-lexer-diff tests/fixtures/manual_tests/ident.fs
+   uv run fsharp-lexer-diff tests/ident.fs
    ```
 
 8. **Regenerate and check official F# lexer tables:**
@@ -123,7 +128,7 @@ dotnet publish fsharp/proto.proj /restore \
 
 ### Examples
 
-We strictly test our code (lexer) *before* comparing the output with the original official compiler's lexer. We run our test suite using `pytest`:
+We strictly test our code (lexer) _before_ comparing the output with the original official compiler's lexer. We run our test suite using `pytest`:
 
 ```bash
 UV_CACHE_DIR=/tmp/uv-cache uv run pytest
@@ -134,17 +139,18 @@ When you are ready to evaluate exact token parity against the official F# lexer 
 Run the official tokenizer comparison on a manual test file like `ident.fs`:
 
 ```bash
-uv run fsharp-lexer-diff tests/fixtures/manual_tests/ident.fs
+uv run fsharp-lexer-diff tests/ident.fs
 ```
 
 This writes the output for our lexer and the official lexer to the following path:
 `tests/output/lexer-diff/`
 
 The generated files for `ident.fs` will be:
+
 ```text
 tests/output/lexer-diff/ident.fs.official.tokens
 tests/output/lexer-diff/ident.fs.python.tokens
-tests/output/lexer-diff/ident.fs.diff
+tests/output/lexer-diff/ident.fs.diff (If this file exists, there are differences between the two token outputs)
 ```
 
 The output format within these `.tokens` files looks like this:
@@ -153,18 +159,19 @@ The output format within these `.tokens` files looks like this:
 line:start_col:end_col<TAB>TOKEN_NAME<TAB>lexeme<TAB>tag<TAB>full_matched_length
 ```
 
-For instance, an identifier declaration in `tests/fixtures/manual_tests/ident.fs`:
+For instance, an identifier declaration in `tests/ident.fs`:
+
 ```fsharp
 let simple = 1
 ```
 
 Might produce output resembling (depending on tokens included):
+
 ```text
 8:4:10	IDENT	simple	tag	6
 ```
 
 The command exits with status `1` if our output and the official output differ, letting us perfectly tune identifier edge cases (e.g. `` `backtick identifiers` ``, unicode variables, and weird connectors) against the spec.
-
 
 ### Coverage
 
@@ -186,8 +193,8 @@ Since we are focusing strictly on Identifiers, the remaining work is ensuring th
 
 We adapt the code from two main sources:
 
-- [FsLexYacc](https://github.com/fsprojects/FsLexYacc.git): The original F# Lexer. 
-- [dotnet/fsharp](https://github.com/dotnet/fsharp.git): The F# compiler, F# core library, and F# editor tools. 
+- [FsLexYacc](https://github.com/fsprojects/FsLexYacc.git): The original F# Lexer.
+- [dotnet/fsharp](https://github.com/dotnet/fsharp.git): The F# compiler, F# core library, and F# editor tools.
 
 Generator reference:
 
@@ -204,5 +211,6 @@ F# lexer rule source:
 
 We also present the code into Github via this [link](https://github.com/tanp21/F-Sharp-Full-Lexer). Currently we have two branches:
 **main** and **identifier_only**. We handle both the branch with full implementation:
+
 - **main**: implements full lexer, including keywords, identifiers, etc.
 - **identifier_only**: implements lexer for identifiers only.

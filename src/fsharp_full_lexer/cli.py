@@ -44,7 +44,7 @@ def main() -> None:
         )
         return
 
-    output = format_official_tokens(tokens)
+    output = format_official_tokens(tokens, ident_only=True)
     if output:
         print(output)
 
