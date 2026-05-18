@@ -15,6 +15,7 @@ class IfdefExpr:
 
 class PPParser:
     def __init__(self, text: str) -> None:
+        text = text.replace("&&&", "&&").replace("|||", "||")
         self.tokens = regex.findall(r"#if|#elif|[A-Za-z_][\p{L}\p{N}_']*|&&|\|\||!|\(|\)", text)
         self.index = 0
         if self.tokens and self.tokens[0] in {"#if", "#elif"}:
@@ -63,6 +64,16 @@ class PPParser:
             return expr
         if tok in {"&&", "||", ")"}:
             raise SyntaxError(f"unexpected token {tok!r}")
+        if self.peek() == "(":
+            depth = 0
+            while self.peek() is not None:
+                current = self.pop()
+                if current == "(":
+                    depth += 1
+                elif current == ")":
+                    depth -= 1
+                    if depth == 0:
+                        break
         return IfdefExpr("id", tok)
 
 

@@ -164,7 +164,12 @@ def test_unit_static_member_operator_is_not_block_comment():
 
 
 def test_symbolic_operator_maximal_munch_matches_official_rules():
-    tokens = raw("let ( ** ) x y = x ** y\nlet (.!) r = !r\nlet ( *. ) a b = a *. b")
+    tokens = raw(
+        "let ( ** ) x y = x ** y\n"
+        "let (.!) r = !r\n"
+        "let ( *. ) a b = a *. b\n"
+        "let z = a |*| b"
+    )
     assert [token.kind for token in tokens] == [
         TokenKind.LET,
         TokenKind.LPAREN,
@@ -194,6 +199,12 @@ def test_symbolic_operator_maximal_munch_matches_official_rules():
         TokenKind.EQUALS,
         TokenKind.IDENT,
         TokenKind.INFIX_STAR_DIV_MOD_OP,
+        TokenKind.IDENT,
+        TokenKind.LET,
+        TokenKind.IDENT,
+        TokenKind.EQUALS,
+        TokenKind.IDENT,
+        TokenKind.INFIX_BAR_OP,
         TokenKind.IDENT,
         TokenKind.EOF,
     ]
@@ -235,6 +246,24 @@ def test_preprocessor_defined_call_is_single_identifier_chunk():
     assert "1:19:35\tWHITESPACE\t || defined(TEST)\t6\t35" in lines
 
 
+def test_complex_preprocessor_expression_does_not_crash():
+    source = "\n".join(
+        [
+            "#if ~~~(defined(DEBUG) &&& defined(TRACE)) ||| defined(RELEASE) ^^^ defined(EXP)",
+            "#define A",
+            "#elif not defined(LEGACY) &&& (defined(ALPHA) ||| defined(BETA))",
+            "#define B",
+            "#endif",
+        ]
+    )
+    lines = format_official_tokens(
+        tokenize(source, skip_trivia=False, use_lex_filter=False)
+    ).splitlines()
+
+    assert "1:1:3\tHASH_IF\t#if\t0\t80" in lines
+    assert "3:1:5\tHASH_IF\t#elif\t0\t64" in lines
+
+
 def test_line_comment_keeps_block_doc_marker_as_word():
     tokens = tokenize("// // vs (**), global::", skip_trivia=False, use_lex_filter=False)
     assert [token.text for token in tokens[:-1]] == [
@@ -253,6 +282,82 @@ def test_line_comment_keeps_block_doc_marker_as_word():
 def test_hash_help_emits_hash_only_like_unknown_directive_name():
     tokens = tokenize("#help", skip_trivia=False, use_lex_filter=False)
     assert [(token.kind, token.text) for token in tokens[:-1]] == [(TokenKind.HASH, "#")]
+
+
+def test_dynamic_assignment_operator_maximal_munches():
+    tokens = raw("let (?<-) target name value = target\nobj ?<- prop")
+    assert [token.kind for token in tokens] == [
+        TokenKind.LET,
+        TokenKind.LPAREN,
+        TokenKind.INFIX_COMPARE_OP,
+        TokenKind.RPAREN,
+        TokenKind.IDENT,
+        TokenKind.IDENT,
+        TokenKind.IDENT,
+        TokenKind.EQUALS,
+        TokenKind.IDENT,
+        TokenKind.IDENT,
+        TokenKind.INFIX_COMPARE_OP,
+        TokenKind.IDENT,
+        TokenKind.EOF,
+    ]
+
+
+def test_unknown_backslash_escape_splits_as_single_backslash():
+    tokens = tokenize('"C:\\libs\\MyLib.dll"', skip_trivia=False, use_lex_filter=False)
+    assert [token.text for token in tokens[:-1]] == [
+        '"',
+        "C",
+        ":",
+        "\\",
+        "libs",
+        "\\",
+        "MyLib",
+        ".",
+        "dll",
+        '"',
+    ]
+
+
+def test_hash_warning_error_undef_emit_hash_only_in_active_code():
+    tokens = tokenize(
+        '#undef MODE\n#warning "Alpha undefined"\n#error "Legacy unsupported"',
+        skip_trivia=False,
+        use_lex_filter=False,
+    )
+    assert [(token.kind, token.text) for token in tokens if token.kind == TokenKind.HASH] == [
+        (TokenKind.HASH, "#"),
+        (TokenKind.HASH, "#"),
+        (TokenKind.HASH, "#"),
+    ]
+
+
+def test_block_comment_splits_stars_before_closer():
+    tokens = tokenize("(** Block doc with ***)", skip_trivia=False, use_lex_filter=False)
+    assert [token.text for token in tokens[:-1]] == [
+        "(*",
+        "*",
+        " ",
+        "Block",
+        " ",
+        "doc",
+        " ",
+        "with",
+        " ",
+        "*",
+        "*",
+        "*)",
+    ]
+
+
+def test_numeric_indent_directive_falls_back_to_hash_tokens():
+    tokens = tokenize("    #indent 4", skip_trivia=False, use_lex_filter=False)
+    assert [(token.kind, token.text) for token in tokens[:-1]] == [
+        (TokenKind.WHITESPACE, "    "),
+        (TokenKind.HASH, "#"),
+        (TokenKind.WHITESPACE, " "),
+        (TokenKind.INT32, "4"),
+    ]
 
 
 def test_inactive_code_splits_quoted_text_like_words():
